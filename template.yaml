@@ -6,10 +6,18 @@ Description: >
   status API.
 
 Parameters:
-  MartaRailSecretName:
+  MartaRailParameterName:
     Type: String
-    Default: commute-assistant/marta-rail-key
-    Description: Secrets Manager secret holding the MARTA rail API key.
+    Default: /commute-assistant/marta-rail-key
+    Description: >
+      SSM Parameter Store parameter holding the MARTA rail API key. Standard
+      parameters are free; Secrets Manager would bill $0.40/month per secret
+      for the same job at this scale.
+
+  LogRetentionInDays:
+    Type: Number
+    Default: 14
+    Description: Lambda log retention. Without this logs are kept forever.
 
   AlertCooldownSeconds:
     Type: Number
@@ -110,7 +118,7 @@ Resources:
         Variables:
           ALERT_TOPIC_ARN: !Ref AlertTopic
           ALERT_COOLDOWN_SECONDS: !Ref AlertCooldownSeconds
-          MARTA_RAIL_API_KEY: !Sub "{{resolve:secretsmanager:${MartaRailSecretName}:SecretString}}"
+          MARTA_RAIL_API_KEY: !Sub "{{resolve:ssm:${MartaRailParameterName}}}"
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref RoutesTable
@@ -144,7 +152,7 @@ Resources:
       Description: On-demand API — current route/trip status and reliability.
       Environment:
         Variables:
-          MARTA_RAIL_API_KEY: !Sub "{{resolve:secretsmanager:${MartaRailSecretName}:SecretString}}"
+          MARTA_RAIL_API_KEY: !Sub "{{resolve:ssm:${MartaRailParameterName}}}"
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref RoutesTable
@@ -158,6 +166,18 @@ Resources:
           Properties:
             Path: /{proxy+}
             Method: ANY
+
+  CheckCommuteLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${CheckCommuteFunction}"
+      RetentionInDays: !Ref LogRetentionInDays
+
+  StatusLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/${StatusFunction}"
+      RetentionInDays: !Ref LogRetentionInDays
 
 Outputs:
   ApiUrl:

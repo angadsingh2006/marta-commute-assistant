@@ -36,14 +36,14 @@ proactive alerting — is what this project closes.
                          reliability stats)        alerts mid-delay)
                                  │
                                  ▼ (only if delayed & not already alerted)
-                          SNS Topic ──▶ SMS to your phone
+                          SNS Topic ──▶ email (or SMS) to you
 
                                  │
                                  ▼ (both legs checked, then evaluated as a trip)
                     DynamoDB: trips (ordered leg pair + transfer buffer)
                                  │
                                  ▼ (only if connection at risk & not already alerted)
-                          SNS Topic ──▶ SMS to your phone
+                          SNS Topic ──▶ email (or SMS) to you
 
 Separately, on demand:
 Client ──▶ API Gateway ──▶ StatusFunction (Lambda) ──▶ routes + trips + arrival_log tables
@@ -67,7 +67,8 @@ about the connection as a whole, not just each leg in isolation.
 | **Trip-level connection risk is its own check, not "either leg crossed its threshold"** | A 5-minute bus delay is a non-event on its own; the same delay is a missed connection if your transfer buffer is 4 minutes. `_check_trips()` compares `leg1_wait + buffer` against `leg2_wait` directly, so it catches connection risk a per-route threshold would miss (leg 1 slightly late, leg 2 right on time — individually fine, together a missed train) and avoids false alarms the reverse way (leg 1 badly delayed but leg 2 is also running late, so the connection's actually fine). |
 | **Trip alerts use a separate `trip:<id>` dedup namespace** from route alerts | Route ids and trip ids could otherwise collide in the shared `alert_state` table's key space; prefixing keeps a trip alert and a route alert for a similarly-named id from stepping on each other's cooldown. |
 | **Alert dedup via a conditional DynamoDB write, not an in-memory flag** | Lambda instances aren't guaranteed to persist between scheduled invocations, so any in-memory "already alerted" state disappears between runs. A conditional `PutItem` with TTL gives the same guarantee (no duplicate alert within the cooldown) durably and atomically. |
-| **MARTA API key pulled from Secrets Manager**, not a template parameter | An API key in a CloudFormation parameter or a Lambda console env var is one accidental `git add` or screenshot away from being leaked. Secrets Manager keeps it out of both the template and version control. |
+| **MARTA API key pulled from SSM Parameter Store**, not a template parameter | An API key written into a CloudFormation parameter is one accidental `git add` or screenshot away from being leaked, so it's resolved at deploy time instead and never appears in the template. Standard SSM parameters are free, where Secrets Manager bills $0.40/month per secret for what is, at this scale, the same job. |
+| **Email as the default alert channel**, with SMS as an opt-in | SNS email is free and needs no sender registration; US SMS bills per message and requires a registered origination number. `notify.py` publishes to the topic either way, so the channel is a subscription choice, not a code change. |
 | **`WAITING_SECONDS` / GTFS `arrival.time` compared to a per-route threshold**, not a fixed system-wide cutoff | "Delayed" means something different for a bus you catch every 10 minutes versus a train every 20 — the threshold lives per-route in the `routes` table so each one can be tuned independently. |
 
 ## Data model
@@ -144,7 +145,11 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
 
 1. Register for a free MARTA rail API key at MARTA's developer resources
    page (bus data needs no key).
-2. Store it: `aws secretsmanager create-secret --name commute-assistant/marta-rail-key --secret-string <your-key>`
+2. Store it in Parameter Store (Standard tier, free):
+   ```bash
+   aws ssm put-parameter --name /commute-assistant/marta-rail-key \
+     --value <your-key> --type String
+   ```
 3. Add your watched route(s) as items in the `routes` table (console or
    `aws dynamodb put-item`) using the shape above — one item per leg,
    bus or rail.
@@ -154,8 +159,13 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
    matters because the bus feed is parsed with `gtfs-realtime-bindings`,
    whose protobuf extension has to be built for the Lambda runtime rather
    than for your laptop.
-6. Subscribe your phone to the alert topic:
-   `aws sns subscribe --topic-arn <AlertTopicArn output> --protocol sms --notification-endpoint +1XXXXXXXXXX`
+6. Subscribe to the alert topic, then confirm the link in your inbox:
+   ```bash
+   aws sns subscribe --topic-arn <AlertTopicArn output> \
+     --protocol email --notification-endpoint you@example.com
+   ```
+   For texts instead, use `--protocol sms --notification-endpoint +1XXXXXXXXXX`
+   — note that US SMS bills per message and needs a registered sender.
 7. Read back the API key AWS generated for you during the deploy — it isn't
    something you register for anywhere, and the deploy only prints its id:
    ```bash
@@ -186,6 +196,27 @@ injected as fakes:
 
 Tests needing live network/DynamoDB/SNS belong in `tests/integration/` so a
 bare `pytest` stays fast.
+
+## What this costs to run
+
+Designed to sit inside the AWS always-free tier. At two watched routes and a
+5-minute poll across two commute windows, that's ~1,550 Lambda invocations a
+month:
+
+| Service | Monthly | Why |
+|---|---|---|
+| Lambda | $0 | Free tier is 1M requests and 400,000 GB-sec; this uses well under 1% of both. |
+| EventBridge | $0 | Scheduled rules are not billed. |
+| DynamoDB | ~$0 | On-demand billing, so idle tables cost nothing; ~6,000 requests/month and far under the 25 GB free storage. |
+| CloudWatch Logs | $0 | Under the 5 GB free ingestion, and retention is capped at 14 days. |
+| API Gateway | ~$0 | Billed per request at $3.50/million. |
+| SNS | $0 | Email notifications are free. SMS is the one thing here that bills per message. |
+| Parameter Store | $0 | Standard parameters are free; Secrets Manager would be $0.40/month. |
+
+Two things worth doing before you deploy: set an **AWS Budgets** zero-spend
+alert (free, and it emails you the moment anything bills), and remember that
+API Gateway's free tier is 12 months rather than perpetual — past that it's
+still only per-request.
 
 ## Possible extensions
 

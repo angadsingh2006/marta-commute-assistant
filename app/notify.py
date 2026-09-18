@@ -1,4 +1,10 @@
-"""SNS publishing and the alert wording that goes with it."""
+"""SNS publishing and the alert wording that goes with it.
+
+Alerts are published to one topic; the subscription decides the channel.
+Email costs nothing and needs no sender registration, so it is the documented
+default — SMS works by subscribing a phone number instead, at a per-message
+charge. Messages stay short enough for either.
+"""
 
 import os
 from typing import Any, Dict, Optional
@@ -26,7 +32,7 @@ def send_route_alert(route: Dict[str, Any], wait_seconds: int) -> None:
         f"{label}: next arrival is {_minutes(wait_seconds)} away "
         f"(over your {_minutes(threshold)} limit)."
     )
-    _publish(message)
+    _publish(f"Delayed: {label}", message)
 
 
 def send_trip_alert(
@@ -40,12 +46,23 @@ def send_trip_alert(
         f"{label}: connection at risk. Leg 1 in {_minutes(leg1_wait_seconds)}, "
         f"leg 2 in {_minutes(leg2_wait_seconds)} — not enough transfer time."
     )
-    _publish(message)
+    _publish(f"Connection at risk: {label}", message)
 
 
-def _publish(message: str) -> None:
+def _publish(subject: str, message: str) -> None:
     """Publish one message to the alert topic."""
-    _sns().publish(TopicArn=os.environ[ALERT_TOPIC_ARN_ENV], Message=message)
+    _sns().publish(
+        TopicArn=os.environ[ALERT_TOPIC_ARN_ENV],
+        Subject=_subject(subject),
+        Message=message,
+    )
+
+
+def _subject(text: str) -> str:
+    """Fit a subject to what SNS accepts: one ASCII line, 100 characters."""
+    single_line = " ".join(text.split())
+    ascii_only = single_line.encode("ascii", "replace").decode("ascii")
+    return ascii_only[:100]
 
 
 def _minutes(seconds: Optional[int]) -> str:
