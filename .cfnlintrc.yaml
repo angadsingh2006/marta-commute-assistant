@@ -1,0 +1,5 @@
+# W3005 fires on DependsOn in the UsagePlan/UsagePlanKey resources that the SAM
+# transform generates for ApiKeyRequired. They are not in template.yaml and
+# cannot be edited from it, so the rule is muted rather than left failing.
+ignore_checks:
+  - W3005

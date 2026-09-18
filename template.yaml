@@ -17,6 +17,19 @@ Parameters:
     Description: How long a route or trip stays muted after it alerts.
 
 Globals:
+  Api:
+    Auth:
+      ApiKeyRequired: true
+      UsagePlan:
+        CreateUsagePlan: PER_API
+        Description: Caps damage from a leaked key — and from a runaway script.
+        Quota:
+          Limit: 500
+          Period: DAY
+        Throttle:
+          BurstLimit: 10
+          RateLimit: 5
+
   Function:
     Runtime: python3.13
     Timeout: 30
@@ -148,8 +161,14 @@ Resources:
 
 Outputs:
   ApiUrl:
-    Description: Base URL for the on-demand status API.
+    Description: Base URL for the on-demand status API. Requires an x-api-key header.
     Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+
+  ApiKeyId:
+    Description: >
+      Id of the generated API key. Read the secret value with:
+      aws apigateway get-api-key --api-key <this id> --include-value --query value --output text
+    Value: !Ref ServerlessRestApiApiKey
 
   AlertTopicArn:
     Description: Subscribe your phone to this topic to receive alerts.

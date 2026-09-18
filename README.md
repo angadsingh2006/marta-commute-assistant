@@ -130,6 +130,16 @@ going the wrong way.
 | `GET` | `/routes/{route_id}/reliability?days=14` | On-time rate broken down by day of week, from logged history. |
 | `GET` | `/trips/{trip_id}/status` | Both legs' current wait, and whether the connection is at risk right now. |
 
+Every endpoint requires an `x-api-key` header. An unauthenticated URL would
+let anyone burn the owner's MARTA rail quota and read their commute pattern,
+so the gateway rejects keyless requests before the Lambda runs — a usage plan
+(500/day, 5 req/sec) caps the damage if the key ever leaks.
+
+```bash
+curl -H "x-api-key: $COMMUTE_API_KEY" \
+  "$API_URL/routes/morning-bus-51/status"
+```
+
 ## Setup
 
 1. Register for a free MARTA rail API key at MARTA's developer resources
@@ -146,6 +156,13 @@ going the wrong way.
    than for your laptop.
 6. Subscribe your phone to the alert topic:
    `aws sns subscribe --topic-arn <AlertTopicArn output> --protocol sms --notification-endpoint +1XXXXXXXXXX`
+7. Read back the API key AWS generated for you during the deploy — it isn't
+   something you register for anywhere, and the deploy only prints its id:
+   ```bash
+   aws apigateway get-api-key --api-key <ApiKeyId output> \
+     --include-value --query value --output text
+   ```
+   Keep it out of the repo, the same as the MARTA key.
 
 ## Testing
 
