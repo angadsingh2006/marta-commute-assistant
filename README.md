@@ -155,10 +155,10 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
    bus or rail.
 4. If your commute involves a transfer, add a `trips` item chaining the
    two route_ids together with a transfer buffer.
-5. `sam build --use-container && sam deploy --guided` — the container build
-   matters because the bus feed is parsed with `gtfs-realtime-bindings`,
-   whose protobuf extension has to be built for the Lambda runtime rather
-   than for your laptop.
+5. `sam build && sam deploy --guided` — no Docker needed: the Makefile pins
+   pip to the Lambda runtime's platform (`manylinux2014_x86_64`, cp313), so
+   the compiled protobuf extension in `gtfs-realtime-bindings` is packaged
+   for Lambda rather than for your laptop.
 6. Subscribe to the alert topic, then confirm the link in your inbox:
    ```bash
    aws sns subscribe --topic-arn <AlertTopicArn output> \
