@@ -3,8 +3,11 @@
 Not part of either Lambda — a local helper, because MARTA's realtime feeds
 identify stops only by number, and you need a name to find yours.
 
-    python3 tools/find_stop.py "auburn ave"      search stops by name
-    python3 tools/find_stop.py --stop 211751     which routes serve that stop now
+Run it with the project's virtualenv active (`source .venv/bin/activate`),
+otherwise requests and the GTFS bindings won't be importable.
+
+    python tools/find_stop.py "auburn ave"      search stops by name
+    python tools/find_stop.py --stop 211751     which routes serve that stop now
 """
 
 import csv

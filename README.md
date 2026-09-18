@@ -153,8 +153,9 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
 3. Find the stop you actually use — the realtime feeds identify stops only
    by number, so there's a helper for this:
    ```bash
-   python3 tools/find_stop.py "auburn ave"      # search stops by name
-   python3 tools/find_stop.py --stop 211751     # routes serving it right now
+   source .venv/bin/activate                    # see Testing below for first-time setup
+   python tools/find_stop.py "auburn ave"       # search stops by name
+   python tools/find_stop.py --stop 211751      # routes serving it right now
    ```
    Then add your watched route(s) as items in the `routes` table (console or
    `aws dynamodb put-item`) using the shape above — one item per leg,
@@ -183,9 +184,14 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
 ## Testing
 
 ```bash
+python3 -m venv .venv          # first time only
+source .venv/bin/activate      # every new terminal
 pip install -r requirements.txt
 pytest
 ```
+
+Your shell prompt shows `(.venv)` once the environment is active. Without it,
+`python` won't find `requests` or the GTFS bindings.
 
 31 unit tests, no network or AWS required — the I/O boundaries are
 injected as fakes:
