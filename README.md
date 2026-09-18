@@ -150,7 +150,13 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
    aws ssm put-parameter --name /commute-assistant/marta-rail-key \
      --value <your-key> --type String
    ```
-3. Add your watched route(s) as items in the `routes` table (console or
+3. Find the stop you actually use — the realtime feeds identify stops only
+   by number, so there's a helper for this:
+   ```bash
+   python3 tools/find_stop.py "auburn ave"      # search stops by name
+   python3 tools/find_stop.py --stop 211751     # routes serving it right now
+   ```
+   Then add your watched route(s) as items in the `routes` table (console or
    `aws dynamodb put-item`) using the shape above — one item per leg,
    bus or rail.
 4. If your commute involves a transfer, add a `trips` item chaining the
