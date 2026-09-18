@@ -157,8 +157,8 @@ pytest
 The pure logic is unit tested: the two alert predicates in
 `tests/test_thresholds.py`, and the reliability rollup in
 `tests/test_reliability.py`. `marta_client.py`, `db.py` and `notify.py` need
-live network/DynamoDB/SNS and are left for integration tests (see
-`CLAUDE.md`).
+live network/DynamoDB/SNS to test meaningfully and are left for integration
+tests, which belong in `tests/integration/` so a bare `pytest` stays fast.
 
 ## Possible extensions
 
