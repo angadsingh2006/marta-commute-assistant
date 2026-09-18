@@ -80,9 +80,17 @@ def _rail_arrivals() -> List[Dict[str, Any]]:
         response.raise_for_status()
         arrivals = response.json()
     except (requests.RequestException, ValueError) as exc:
-        raise MartaFeedError(f"rail feed unavailable: {exc}") from exc
+        raise MartaFeedError(_redact(f"rail feed unavailable: {exc}")) from None
 
     return _cache_put("rail", arrivals)
+
+
+def _redact(text: str) -> str:
+    """Replace the rail API key with a placeholder wherever it appears in text."""
+    api_key = os.environ.get(RAIL_API_KEY_ENV)
+    if api_key:
+        return text.replace(api_key, "***")
+    return text
 
 
 def _coerce_seconds(raw: Any) -> Optional[int]:

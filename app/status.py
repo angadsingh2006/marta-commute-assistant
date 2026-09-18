@@ -1,5 +1,6 @@
 """On-demand Lambda: current route and trip status, plus logged reliability."""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, HTTPException, Query
@@ -7,6 +8,9 @@ from mangum import Mangum
 
 from app import db, marta_client
 from app.check_commute import is_connection_at_risk, is_delayed
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 app = FastAPI(
     title="Commute Assistant",
@@ -127,7 +131,10 @@ def _live_wait(route: Dict[str, Any]) -> Optional[int]:
     try:
         return marta_client.next_wait_seconds(route)
     except marta_client.MartaFeedError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        logger.warning("feed unavailable for route %s: %s", route.get("route_id"), exc)
+        raise HTTPException(
+            status_code=503, detail="MARTA feed is unavailable right now"
+        ) from None
 
 
 handler = Mangum(app)
