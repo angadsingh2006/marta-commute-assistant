@@ -5,6 +5,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import requests
+
 from app import marta_client
 
 
@@ -30,3 +32,18 @@ def test_leaves_text_alone_when_no_key_is_configured(monkeypatch):
     monkeypatch.delenv("MARTA_RAIL_API_KEY", raising=False)
 
     assert marta_client._redact("bus feed unavailable") == "bus feed unavailable"
+
+
+def test_redacts_the_key_as_requests_percent_encodes_it_into_urls(monkeypatch):
+    key = "ab+cd/ef gh=="
+    monkeypatch.setenv("MARTA_RAIL_API_KEY", key)
+
+    try:
+        requests.get("http://127.0.0.1:9/x", params={"apiKey": key}, timeout=1)
+    except requests.RequestException as exc:
+        message = str(exc)
+
+    cleaned = marta_client._redact(message)
+
+    assert "ab%2Bcd%2Fef+gh%3D%3D" not in cleaned
+    assert key not in cleaned

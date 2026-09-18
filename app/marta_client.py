@@ -5,6 +5,8 @@ import os
 import time
 from typing import Any, Dict, List, Optional
 
+from urllib.parse import quote, quote_plus
+
 import requests
 from google.protobuf.message import DecodeError
 from google.transit import gtfs_realtime_pb2
@@ -48,6 +50,8 @@ def _next_rail_wait(route: Dict[str, Any]) -> Optional[int]:
 
     waits = []
     for arrival in _rail_arrivals():
+        if not isinstance(arrival, dict):
+            continue
         if arrival.get("STATION", "").strip().upper() != station:
             continue
         if arrival.get("LINE", "").strip().upper() != line:
@@ -65,7 +69,7 @@ def _rail_arrivals() -> List[Dict[str, Any]]:
     """Fetch and cache the rail feed's full list of system-wide arrivals."""
     cached = _cache_get("rail")
     if cached is not None:
-        return cached
+        return _unwrap(cached)
 
     api_key = os.environ.get(RAIL_API_KEY_ENV)
     if not api_key:
@@ -80,17 +84,36 @@ def _rail_arrivals() -> List[Dict[str, Any]]:
         response.raise_for_status()
         arrivals = response.json()
     except (requests.RequestException, ValueError) as exc:
-        raise MartaFeedError(_redact(f"rail feed unavailable: {exc}")) from None
+        _fail("rail", _redact(f"rail feed unavailable: {exc}"))
+
+    if not isinstance(arrivals, list):
+        _fail("rail", "rail feed returned an unexpected payload")
 
     return _cache_put("rail", arrivals)
 
 
 def _redact(text: str) -> str:
-    """Replace the rail API key with a placeholder wherever it appears in text."""
+    """Replace the rail API key with a placeholder, raw or URL-encoded."""
     api_key = os.environ.get(RAIL_API_KEY_ENV)
-    if api_key:
-        return text.replace(api_key, "***")
+    if not api_key:
+        return text
+    for form in (api_key, quote_plus(api_key), quote(api_key, safe="")):
+        text = text.replace(form, "***")
     return text
+
+
+def _fail(cache_key: str, message: str) -> None:
+    """Cache a feed failure for the TTL window, then raise it."""
+    error = MartaFeedError(message)
+    _cache_put(cache_key, error)
+    raise error from None
+
+
+def _unwrap(cached: Any) -> Any:
+    """Return a cached feed, re-raising instead if the cached value is a failure."""
+    if isinstance(cached, MartaFeedError):
+        raise cached
+    return cached
 
 
 def _coerce_seconds(raw: Any) -> Optional[int]:
@@ -136,7 +159,7 @@ def _bus_feed() -> Any:
     """Fetch and cache the bus GTFS-realtime trip update feed."""
     cached = _cache_get("bus")
     if cached is not None:
-        return cached
+        return _unwrap(cached)
 
     feed = gtfs_realtime_pb2.FeedMessage()
     try:
@@ -144,7 +167,7 @@ def _bus_feed() -> Any:
         response.raise_for_status()
         feed.ParseFromString(response.content)
     except (requests.RequestException, DecodeError) as exc:
-        raise MartaFeedError(f"bus feed unavailable: {exc}") from exc
+        _fail("bus", f"bus feed unavailable: {exc}")
 
     return _cache_put("bus", feed)
 

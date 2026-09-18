@@ -31,8 +31,7 @@ def _table(env_var: str):
 
 def get_routes() -> List[Dict[str, Any]]:
     """Return every watched route."""
-    response = _table(ROUTES_TABLE_ENV).scan()
-    return [_undecimal(item) for item in response.get("Items", [])]
+    return _paginate(_table(ROUTES_TABLE_ENV).scan)
 
 
 def get_route(route_id: str) -> Optional[Dict[str, Any]]:
@@ -44,8 +43,7 @@ def get_route(route_id: str) -> Optional[Dict[str, Any]]:
 
 def get_trips() -> List[Dict[str, Any]]:
     """Return every configured trip."""
-    response = _table(TRIPS_TABLE_ENV).scan()
-    return [_undecimal(item) for item in response.get("Items", [])]
+    return _paginate(_table(TRIPS_TABLE_ENV).scan)
 
 
 def get_trip(trip_id: str) -> Optional[Dict[str, Any]]:
@@ -76,11 +74,11 @@ def log_arrival(
 def recent_arrivals(route_id: str, days: int) -> List[Dict[str, Any]]:
     """Return one route's logged checks from the last `days` days."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
-    response = _table(ARRIVAL_LOG_TABLE_ENV).query(
+    return _paginate(
+        _table(ARRIVAL_LOG_TABLE_ENV).query,
         KeyConditionExpression=Key("route_id").eq(route_id)
-        & Key("checked_at").gte(cutoff)
+        & Key("checked_at").gte(cutoff),
     )
-    return [_undecimal(item) for item in response.get("Items", [])]
 
 
 def claim_alert(alert_key: str, cooldown_seconds: int) -> bool:
@@ -101,6 +99,23 @@ def claim_alert(alert_key: str, cooldown_seconds: int) -> bool:
         if exc.response["Error"]["Code"] == "ConditionalCheckFailedException":
             return False
         raise
+
+
+def release_alert(alert_key: str) -> None:
+    """Drop a claimed cooldown so the alert can be retried on the next run."""
+    _table(ALERT_STATE_TABLE_ENV).delete_item(Key={"alert_key": alert_key})
+
+
+def _paginate(operation, **kwargs) -> List[Dict[str, Any]]:
+    """Read every page of a DynamoDB scan or query, not just the first."""
+    items: List[Dict[str, Any]] = []
+    while True:
+        response = operation(**kwargs)
+        items.extend(_undecimal(item) for item in response.get("Items", []))
+        start_key = response.get("LastEvaluatedKey")
+        if not start_key:
+            return items
+        kwargs["ExclusiveStartKey"] = start_key
 
 
 def _undecimal(value: Any) -> Any:

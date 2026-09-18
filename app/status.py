@@ -135,6 +135,12 @@ def _live_wait(route: Dict[str, Any]) -> Optional[int]:
         raise HTTPException(
             status_code=503, detail="MARTA feed is unavailable right now"
         ) from None
+    except (KeyError, ValueError) as exc:
+        logger.warning("route %s is misconfigured: %s", route.get("route_id"), exc)
+        raise HTTPException(
+            status_code=500,
+            detail=f"route {route.get('route_id')!r} is misconfigured",
+        ) from None
 
 
 handler = Mangum(app)

@@ -154,11 +154,21 @@ pip install -r requirements.txt
 pytest
 ```
 
-The pure logic is unit tested: the two alert predicates in
-`tests/test_thresholds.py`, and the reliability rollup in
-`tests/test_reliability.py`. `marta_client.py`, `db.py` and `notify.py` need
-live network/DynamoDB/SNS to test meaningfully and are left for integration
-tests, which belong in `tests/integration/` so a bare `pytest` stays fast.
+31 unit tests, no network or AWS required — the I/O boundaries are
+injected as fakes:
+
+| File | Covers |
+|---|---|
+| `test_thresholds.py` | Both alert predicates, including the boundary cases |
+| `test_reliability.py` | The on-time rollup and day-of-week grouping |
+| `test_check_commute.py` | A failed send releasing its cooldown; bad config skipped, not fatal |
+| `test_marta_client.py` | Malformed feed payloads, and failures cached so they aren't retried per route |
+| `test_redaction.py` | The API key never reaching logs, raw or URL-encoded |
+| `test_db.py` | Paginated scans and queries returning every page |
+| `test_status.py` | Misconfiguration surfacing as a clear error, not a crash |
+
+Tests needing live network/DynamoDB/SNS belong in `tests/integration/` so a
+bare `pytest` stays fast.
 
 ## Possible extensions
 

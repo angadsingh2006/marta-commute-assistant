@@ -54,15 +54,18 @@ def _check_routes(routes: List[Dict[str, Any]]) -> Dict[str, Optional[int]]:
     waits: Dict[str, Optional[int]] = {}
 
     for route in routes:
-        route_id = route["route_id"]
         try:
+            route_id = route["route_id"]
+            threshold_seconds = route["alert_threshold_seconds"]
             wait_seconds = marta_client.next_wait_seconds(route)
         except (marta_client.MartaFeedError, KeyError, ValueError):
-            logger.exception("could not read arrivals for route %s", route_id)
+            logger.exception(
+                "could not check route %s", route.get("route_id", "<no route_id>")
+            )
             continue
 
         waits[route_id] = wait_seconds
-        delayed = is_delayed(wait_seconds, route["alert_threshold_seconds"])
+        delayed = is_delayed(wait_seconds, threshold_seconds)
 
         db.log_arrival(
             route_id=route_id,
@@ -71,9 +74,11 @@ def _check_routes(routes: List[Dict[str, Any]]) -> Dict[str, Optional[int]]:
             was_delayed=delayed,
         )
 
-        if delayed and db.claim_alert(route_id, _cooldown_seconds()):
-            notify.send_route_alert(route, wait_seconds)
-            logger.info("alerted on delayed route %s (%ss)", route_id, wait_seconds)
+        if delayed:
+            _alert_once(
+                route_id,
+                lambda r=route, w=wait_seconds: notify.send_route_alert(r, w),
+            )
 
     return waits
 
@@ -108,16 +113,28 @@ def _check_trips(
         ):
             continue
 
-        if db.claim_alert(f"trip:{trip_id}", _cooldown_seconds()):
-            notify.send_trip_alert(trip, leg1_wait, leg2_wait)
-            logger.info(
-                "alerted on at-risk trip %s (leg1 %ss, leg2 %ss)",
-                trip_id,
-                leg1_wait,
-                leg2_wait,
-            )
+        _alert_once(
+            f"trip:{trip_id}",
+            lambda t=trip, a=leg1_wait, b=leg2_wait: notify.send_trip_alert(t, a, b),
+        )
 
     return checked
+
+
+def _alert_once(alert_key: str, send) -> None:
+    """Claim the cooldown and send, releasing the claim if the send fails."""
+    if not db.claim_alert(alert_key, _cooldown_seconds()):
+        return
+    try:
+        send()
+    except Exception:
+        logger.exception("failed to send alert for %s", alert_key)
+        try:
+            db.release_alert(alert_key)
+        except Exception:
+            logger.exception("could not release cooldown for %s", alert_key)
+    else:
+        logger.info("alerted on %s", alert_key)
 
 
 def _cooldown_seconds() -> int:
