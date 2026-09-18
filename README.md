@@ -144,12 +144,16 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
 ## Setup
 
 1. Register for a free MARTA rail API key at MARTA's developer resources
-   page (bus data needs no key).
+   page. Bus data needs no key — but the parameter in step 2 must exist
+   either way, because CloudFormation resolves it at deploy time for both
+   functions. Watching only buses? Use `unused` as the value.
 2. Store it in Parameter Store (Standard tier, free):
    ```bash
    aws ssm put-parameter --name /commute-assistant/marta-rail-key \
      --value <your-key> --type String
    ```
+   Do this **before** deploying. A missing parameter fails the deploy with
+   `Parameters: [ssm:/...] cannot be found`.
 3. Find the stop you actually use — the realtime feeds identify stops only
    by number, so there's a helper for this:
    ```bash
@@ -208,6 +212,18 @@ injected as fakes:
 
 Tests needing live network/DynamoDB/SNS belong in `tests/integration/` so a
 bare `pytest` stays fast.
+
+## Troubleshooting
+
+| Symptom | Cause |
+|---|---|
+| Deploy fails: `Parameters: [ssm:/...] cannot be found` | The step-2 parameter doesn't exist yet. Create it, then re-run `sam deploy` — no `--guided`, your answers are already in `samconfig.toml`. |
+| Stack sits in `REVIEW_IN_PROGRESS` with 0 resources | A changeset failed before creating anything. Fix the cause and re-run `sam deploy`; the empty stack is reused. |
+| No alert email ever arrives | The SNS subscription was never confirmed. AWS discards messages until you click the link in the confirmation email. |
+| A delayed route sends nothing on a re-run | It's inside its cooldown. Delete that `alert_key` from the `alert_state` table to test again. |
+| `ModuleNotFoundError: requests` | The virtualenv isn't active. `source .venv/bin/activate`. |
+| `find_stop.py` returns no routes for a valid stop | No buses are due right now. Try during service hours. |
+| API returns 403 | Missing or wrong `x-api-key` header. |
 
 ## What this costs to run
 
