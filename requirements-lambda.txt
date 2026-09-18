@@ -3,4 +3,3 @@ fastapi
 mangum
 requests
 gtfs-realtime-bindings
-pytest

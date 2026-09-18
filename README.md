@@ -84,6 +84,22 @@ about the connection as a whole, not just each leg in isolation.
 }
 ```
 
+A rail leg is the same table, keyed on station and line instead of route
+number and stop. `direction` is optional but worth setting — a station
+serves both directions, and without it the soonest train may be the one
+going the wrong way.
+```json
+{
+  "route_id": "morning-rail-red",
+  "mode": "rail",
+  "station": "FIVE POINTS STATION",
+  "line": "RED",
+  "direction": "N",
+  "label": "Red Line @ Five Points, northbound",
+  "alert_threshold_seconds": 900
+}
+```
+
 **arrival_log** (one row per scheduled check)
 ```json
 {
@@ -124,19 +140,25 @@ about the connection as a whole, not just each leg in isolation.
    bus or rail.
 4. If your commute involves a transfer, add a `trips` item chaining the
    two route_ids together with a transfer buffer.
-5. `sam build && sam deploy --guided`
+5. `sam build --use-container && sam deploy --guided` — the container build
+   matters because the bus feed is parsed with `gtfs-realtime-bindings`,
+   whose protobuf extension has to be built for the Lambda runtime rather
+   than for your laptop.
 6. Subscribe your phone to the alert topic:
    `aws sns subscribe --topic-arn <AlertTopicArn output> --protocol sms --notification-endpoint +1XXXXXXXXXX`
 
 ## Testing
 
 ```bash
-pip install pytest
+pip install -r requirements.txt
 pytest
 ```
 
-Pure threshold logic is unit tested; `marta_client.py` and `db.py` need
-live network/DynamoDB and are left for integration tests (see `CLAUDE.md`).
+The pure logic is unit tested: the two alert predicates in
+`tests/test_thresholds.py`, and the reliability rollup in
+`tests/test_reliability.py`. `marta_client.py`, `db.py` and `notify.py` need
+live network/DynamoDB/SNS and are left for integration tests (see
+`CLAUDE.md`).
 
 ## Possible extensions
 

@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Commute Assistant — a scheduled Lambda that watches MARTA routes and trips
+  and texts when a leg is delayed or a transfer is at risk, plus an on-demand
+  status API.
+
+Parameters:
+  MartaRailSecretName:
+    Type: String
+    Default: commute-assistant/marta-rail-key
+    Description: Secrets Manager secret holding the MARTA rail API key.
+
+  AlertCooldownSeconds:
+    Type: Number
+    Default: 1800
+    Description: How long a route or trip stays muted after it alerts.
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ROUTES_TABLE: !Ref RoutesTable
+        TRIPS_TABLE: !Ref TripsTable
+        ARRIVAL_LOG_TABLE: !Ref ArrivalLogTable
+        ALERT_STATE_TABLE: !Ref AlertStateTable
+
+Resources:
+  RoutesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: route_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: route_id
+          KeyType: HASH
+
+  TripsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: trip_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: trip_id
+          KeyType: HASH
+
+  ArrivalLogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: route_id
+          AttributeType: S
+        - AttributeName: checked_at
+          AttributeType: S
+      KeySchema:
+        - AttributeName: route_id
+          KeyType: HASH
+        - AttributeName: checked_at
+          KeyType: RANGE
+
+  AlertStateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: alert_key
+          AttributeType: S
+      KeySchema:
+        - AttributeName: alert_key
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
+
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Commute
+
+  CheckCommuteFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: app.check_commute.handler
+      Description: Scheduled check — detect delays and connection risk, alert.
+      Environment:
+        Variables:
+          ALERT_TOPIC_ARN: !Ref AlertTopic
+          ALERT_COOLDOWN_SECONDS: !Ref AlertCooldownSeconds
+          MARTA_RAIL_API_KEY: !Sub "{{resolve:secretsmanager:${MartaRailSecretName}:SecretString}}"
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoutesTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TripsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ArrivalLogTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AlertStateTable
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt AlertTopic.TopicName
+      Events:
+        MorningCommute:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0/5 12-14 ? * MON-FRI *)
+            Description: Weekday morning commute window, every 5 minutes.
+        EveningCommute:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0/5 21-23 ? * MON-FRI *)
+            Description: Weekday evening commute window, every 5 minutes.
+
+  StatusFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: makefile
+    Properties:
+      CodeUri: .
+      Handler: app.status.handler
+      Description: On-demand API — current route/trip status and reliability.
+      Environment:
+        Variables:
+          MARTA_RAIL_API_KEY: !Sub "{{resolve:secretsmanager:${MartaRailSecretName}:SecretString}}"
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref RoutesTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref TripsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref ArrivalLogTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            Path: /{proxy+}
+            Method: ANY
+
+Outputs:
+  ApiUrl:
+    Description: Base URL for the on-demand status API.
+    Value: !Sub "https://${ServerlessRestApi}.execute-api.${AWS::Region}.amazonaws.com/Prod"
+
+  AlertTopicArn:
+    Description: Subscribe your phone to this topic to receive alerts.
+    Value: !Ref AlertTopic
+
+  RoutesTableName:
+    Description: Add one item per watched commute leg here.
+    Value: !Ref RoutesTable
+
+  TripsTableName:
+    Description: Add one item per watched transfer here.
+    Value: !Ref TripsTable
