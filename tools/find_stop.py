@@ -13,7 +13,6 @@ otherwise requests and the GTFS bindings won't be importable.
 import csv
 import io
 import sys
-import tempfile
 import time
 import zipfile
 from pathlib import Path
@@ -26,7 +25,7 @@ REALTIME_URL = (
 )
 # MARTA's web server rejects requests without a browser-like user agent.
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/120"}
-CACHE = Path(tempfile.gettempdir()) / "marta_gtfs.zip"
+CACHE = Path.home() / ".cache" / "marta-commute" / "google_transit.zip"
 CACHE_MAX_AGE_SECONDS = 86400
 
 
@@ -36,6 +35,7 @@ def load_stops():
         print("downloading MARTA schedule data (~18 MB, once a day)...", file=sys.stderr)
         response = requests.get(GTFS_URL, headers=HEADERS, timeout=120)
         response.raise_for_status()
+        CACHE.parent.mkdir(parents=True, exist_ok=True)
         CACHE.write_bytes(response.content)
 
     with zipfile.ZipFile(CACHE) as archive:

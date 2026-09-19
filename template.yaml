@@ -10,9 +10,10 @@ Parameters:
     Type: String
     Default: /commute-assistant/marta-rail-key
     Description: >
-      SSM Parameter Store parameter holding the MARTA rail API key. Standard
-      parameters are free; Secrets Manager would bill $0.40/month per secret
-      for the same job at this scale.
+      SSM Parameter Store parameter holding the MARTA rail API key, as a
+      SecureString. Read at runtime by the rail branch only, so a bus-only
+      deploy does not need it to exist. Standard-tier SecureStrings are free;
+      Secrets Manager would bill $0.40/month per secret for the same job.
 
   LogRetentionInDays:
     Type: Number
@@ -86,6 +87,9 @@ Resources:
           KeyType: HASH
         - AttributeName: checked_at
           KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: expires_at
+        Enabled: true
 
   AlertStateTable:
     Type: AWS::DynamoDB::Table
@@ -118,7 +122,7 @@ Resources:
         Variables:
           ALERT_TOPIC_ARN: !Ref AlertTopic
           ALERT_COOLDOWN_SECONDS: !Ref AlertCooldownSeconds
-          MARTA_RAIL_API_KEY: !Sub "{{resolve:ssm:${MartaRailParameterName}}}"
+          MARTA_RAIL_PARAMETER_NAME: !Ref MartaRailParameterName
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref RoutesTable
@@ -130,6 +134,11 @@ Resources:
             TableName: !Ref AlertStateTable
         - SNSPublishMessagePolicy:
             TopicName: !GetAtt AlertTopic.TopicName
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${MartaRailParameterName}
       Events:
         MorningCommute:
           Type: Schedule
@@ -152,7 +161,7 @@ Resources:
       Description: On-demand API — current route/trip status and reliability.
       Environment:
         Variables:
-          MARTA_RAIL_API_KEY: !Sub "{{resolve:ssm:${MartaRailParameterName}}}"
+          MARTA_RAIL_PARAMETER_NAME: !Ref MartaRailParameterName
       Policies:
         - DynamoDBReadPolicy:
             TableName: !Ref RoutesTable
@@ -160,6 +169,11 @@ Resources:
             TableName: !Ref TripsTable
         - DynamoDBReadPolicy:
             TableName: !Ref ArrivalLogTable
+        - Statement:
+            - Effect: Allow
+              Action: ssm:GetParameter
+              Resource: !Sub >-
+                arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter${MartaRailParameterName}
       Events:
         Api:
           Type: Api

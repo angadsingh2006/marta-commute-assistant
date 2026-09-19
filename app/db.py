@@ -1,5 +1,3 @@
-"""All DynamoDB access."""
-
 import os
 import time
 from datetime import datetime, timedelta, timezone
@@ -14,6 +12,8 @@ ROUTES_TABLE_ENV = "ROUTES_TABLE"
 TRIPS_TABLE_ENV = "TRIPS_TABLE"
 ARRIVAL_LOG_TABLE_ENV = "ARRIVAL_LOG_TABLE"
 ALERT_STATE_TABLE_ENV = "ALERT_STATE_TABLE"
+
+ARRIVAL_LOG_TTL_DAYS = 120
 
 _resource = None
 _tables: Dict[str, Any] = {}
@@ -65,6 +65,9 @@ def log_arrival(
         "checked_at": checked_at.isoformat(),
         "was_delayed": was_delayed,
         "day_of_week": checked_at.strftime("%A"),
+        "expires_at": int(
+            (checked_at + timedelta(days=ARRIVAL_LOG_TTL_DAYS)).timestamp()
+        ),
     }
     if wait_seconds is not None:
         item["wait_seconds"] = wait_seconds

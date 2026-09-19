@@ -7,7 +7,9 @@ from typing import Any, Dict, List, Optional
 
 from urllib.parse import quote, quote_plus
 
+import boto3
 import requests
+from botocore.exceptions import BotoCoreError, ClientError
 from google.protobuf.message import DecodeError
 from google.transit import gtfs_realtime_pb2
 
@@ -21,11 +23,13 @@ BUS_URL = (
     "https://gtfs-rt.itsmarta.com/TMGTFSRealTimeWebService/tripupdate/tripupdates.pb"
 )
 
-RAIL_API_KEY_ENV = "MARTA_RAIL_API_KEY"
+RAIL_PARAMETER_NAME_ENV = "MARTA_RAIL_PARAMETER_NAME"
 REQUEST_TIMEOUT_SECONDS = 10
 FEED_CACHE_TTL_SECONDS = 20
 
 _feed_cache: Dict[str, Any] = {}
+_ssm_client = None
+_rail_key: Optional[str] = None
 
 
 class MartaFeedError(RuntimeError):
@@ -71,9 +75,7 @@ def _rail_arrivals() -> List[Dict[str, Any]]:
     if cached is not None:
         return _unwrap(cached)
 
-    api_key = os.environ.get(RAIL_API_KEY_ENV)
-    if not api_key:
-        raise MartaFeedError(f"{RAIL_API_KEY_ENV} is not set")
+    api_key = _rail_api_key()
 
     try:
         response = requests.get(
@@ -92,12 +94,38 @@ def _rail_arrivals() -> List[Dict[str, Any]]:
     return _cache_put("rail", arrivals)
 
 
+def _ssm():
+    """Build the SSM client, caching it for reuse."""
+    global _ssm_client
+    if _ssm_client is None:
+        _ssm_client = boto3.client("ssm")
+    return _ssm_client
+
+
+def _rail_api_key() -> str:
+    """Read the rail API key from Parameter Store, caching it for the container."""
+    global _rail_key
+    if _rail_key is not None:
+        return _rail_key
+
+    parameter_name = os.environ.get(RAIL_PARAMETER_NAME_ENV)
+    if not parameter_name:
+        raise MartaFeedError(f"{RAIL_PARAMETER_NAME_ENV} is not set")
+
+    try:
+        response = _ssm().get_parameter(Name=parameter_name, WithDecryption=True)
+    except (BotoCoreError, ClientError) as exc:
+        raise MartaFeedError(f"could not read {parameter_name}: {exc}") from None
+
+    _rail_key = response["Parameter"]["Value"]
+    return _rail_key
+
+
 def _redact(text: str) -> str:
     """Replace the rail API key with a placeholder, raw or URL-encoded."""
-    api_key = os.environ.get(RAIL_API_KEY_ENV)
-    if not api_key:
+    if not _rail_key:
         return text
-    for form in (api_key, quote_plus(api_key), quote(api_key, safe="")):
+    for form in (_rail_key, quote_plus(_rail_key), quote(_rail_key, safe="")):
         text = text.replace(form, "***")
     return text
 
