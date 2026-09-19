@@ -1,9 +1,7 @@
 # Commute Assistant
 
 A serverless tool that watches your actual MARTA commute and texts you
-*before* you walk out the door into a 20-minute wait. Built to solve a real
-problem you have, not a hypothetical one — see `internship-search`-grade
-side projects for why that distinction matters in interviews.
+*before* you walk out the door into a 20-minute wait.
 
 **Stack:** Python (FastAPI + AWS Lambda) · MARTA real-time data · DynamoDB · SNS · EventBridge · SAM (IaC)
 
@@ -67,7 +65,9 @@ about the connection as a whole, not just each leg in isolation.
 | **Trip-level connection risk is its own check, not "either leg crossed its threshold"** | A 5-minute bus delay is a non-event on its own; the same delay is a missed connection if your transfer buffer is 4 minutes. `_check_trips()` compares `leg1_wait + buffer` against `leg2_wait` directly, so it catches connection risk a per-route threshold would miss (leg 1 slightly late, leg 2 right on time — individually fine, together a missed train) and avoids false alarms the reverse way (leg 1 badly delayed but leg 2 is also running late, so the connection's actually fine). |
 | **Trip alerts use a separate `trip:<id>` dedup namespace** from route alerts | Route ids and trip ids could otherwise collide in the shared `alert_state` table's key space; prefixing keeps a trip alert and a route alert for a similarly-named id from stepping on each other's cooldown. |
 | **Alert dedup via a conditional DynamoDB write, not an in-memory flag** | Lambda instances aren't guaranteed to persist between scheduled invocations, so any in-memory "already alerted" state disappears between runs. A conditional `PutItem` with TTL gives the same guarantee (no duplicate alert within the cooldown) durably and atomically. |
-| **MARTA API key pulled from SSM Parameter Store**, not a template parameter | An API key written into a CloudFormation parameter is one accidental `git add` or screenshot away from being leaked, so it's resolved at deploy time instead and never appears in the template. Standard SSM parameters are free, where Secrets Manager bills $0.40/month per secret for what is, at this scale, the same job. |
+| **MARTA API key read from SSM Parameter Store at runtime**, not injected as a Lambda environment variable | An API key written into a CloudFormation parameter is one accidental `git add` or screenshot away from being leaked. Resolving it at deploy time with `{{resolve:ssm:...}}` fixes that but trades it for a second exposure: CloudFormation writes the resolved plaintext into the function's environment config, where anything holding `lambda:GetFunctionConfiguration` can read it. Fetching it inside `marta_client.py` instead keeps the plaintext in exactly one place — Parameter Store, as an encrypted `SecureString` — and scopes each function's IAM to `ssm:GetParameter` on that one parameter ARN. `ssm-secure` dynamic references would have been simpler, but CloudFormation doesn't support them for Lambda environment variables. The key is cached per container, so it costs one extra API call per cold start. Standard-tier SecureStrings are free (KMS's AWS-managed key included), where Secrets Manager bills $0.40/month per secret for the same job. |
+| **The rail key is fetched behind the rail branch**, not at import | A bus-only deploy never calls the rail feed, so it never reads the parameter and doesn't need one to exist. `test_a_bus_route_never_reads_the_rail_key` pins that. |
+| **`arrival_log` rows carry a 120-day TTL** | The log is a precise record of where you stand and when, so it shouldn't accumulate forever. The reliability endpoint caps its query window at 90 days, so 120 leaves the retained data strictly larger than anything readable through the API while still bounding it. |
 | **Email as the default alert channel**, with SMS as an opt-in | SNS email is free and needs no sender registration; US SMS bills per message and requires a registered origination number. `notify.py` publishes to the topic either way, so the channel is a subscription choice, not a code change. |
 | **`WAITING_SECONDS` / GTFS `arrival.time` compared to a per-route threshold**, not a fixed system-wide cutoff | "Delayed" means something different for a bus you catch every 10 minutes versus a train every 20 — the threshold lives per-route in the `routes` table so each one can be tuned independently. |
 
@@ -108,7 +108,8 @@ going the wrong way.
   "checked_at": "2026-09-17T12:05:00+00:00",
   "wait_seconds": 720,
   "was_delayed": true,
-  "day_of_week": "Thursday"
+  "day_of_week": "Thursday",
+  "expires_at": 1800014700
 }
 ```
 
@@ -144,16 +145,16 @@ curl -H "x-api-key: $COMMUTE_API_KEY" \
 ## Setup
 
 1. Register for a free MARTA rail API key at MARTA's developer resources
-   page. Bus data needs no key — but the parameter in step 2 must exist
-   either way, because CloudFormation resolves it at deploy time for both
-   functions. Watching only buses? Use `unused` as the value.
-2. Store it in Parameter Store (Standard tier, free):
+   page. Watching only buses? Skip this and step 2 — the parameter is read
+   only when a rail route is checked, so a bus-only deploy doesn't need one.
+2. Store it in Parameter Store as a `SecureString` (Standard tier, free —
+   encryption uses the AWS-managed KMS key, which costs nothing):
    ```bash
    aws ssm put-parameter --name /commute-assistant/marta-rail-key \
-     --value <your-key> --type String
+     --value <your-key> --type SecureString
    ```
-   Do this **before** deploying. A missing parameter fails the deploy with
-   `Parameters: [ssm:/...] cannot be found`.
+   The deploy no longer depends on this existing, but a rail route checked
+   without it logs `MARTA_RAIL_PARAMETER_NAME is not set` and alerts nothing.
 3. Find the stop you actually use — the realtime feeds identify stops only
    by number, so there's a helper for this:
    ```bash
@@ -197,7 +198,7 @@ pytest
 Your shell prompt shows `(.venv)` once the environment is active. Without it,
 `python` won't find `requests` or the GTFS bindings.
 
-31 unit tests, no network or AWS required — the I/O boundaries are
+39 unit tests, no network or AWS required — the I/O boundaries are
 injected as fakes:
 
 | File | Covers |
@@ -209,6 +210,7 @@ injected as fakes:
 | `test_redaction.py` | The API key never reaching logs, raw or URL-encoded |
 | `test_db.py` | Paginated scans and queries returning every page |
 | `test_status.py` | Misconfiguration surfacing as a clear error, not a crash |
+| `test_notify.py` | Alert wording, and fitting a subject to what SNS accepts |
 
 Tests needing live network/DynamoDB/SNS belong in `tests/integration/` so a
 bare `pytest` stays fast.
@@ -217,7 +219,7 @@ bare `pytest` stays fast.
 
 | Symptom | Cause |
 |---|---|
-| Deploy fails: `Parameters: [ssm:/...] cannot be found` | The step-2 parameter doesn't exist yet. Create it, then re-run `sam deploy` — no `--guided`, your answers are already in `samconfig.toml`. |
+| Rail routes alert nothing, logs show `could not read /commute-assistant/...` | The step-2 parameter is missing, or is a `String` the function can't decrypt. Bus routes are unaffected. |
 | Stack sits in `REVIEW_IN_PROGRESS` with 0 resources | A changeset failed before creating anything. Fix the cause and re-run `sam deploy`; the empty stack is reused. |
 | No alert email ever arrives | The SNS subscription was never confirmed. AWS discards messages until you click the link in the confirmation email. |
 | A delayed route sends nothing on a re-run | It's inside its cooldown. Delete that `alert_key` from the `alert_state` table to test again. |
@@ -227,24 +229,30 @@ bare `pytest` stays fast.
 
 ## What this costs to run
 
-Designed to sit inside the AWS always-free tier. At two watched routes and a
-5-minute poll across two commute windows, that's ~1,550 Lambda invocations a
-month:
+**$0.00/month, measured.** June, July and August 2026 each billed nothing —
+and generated no usage records at all, rather than charges quietly offset by
+promotional credits.
+
+A 5-minute poll across two weekday commute windows is roughly 1,570 Lambda
+invocations a month, a rounding error against the Always Free allowances:
 
 | Service | Monthly | Why |
 |---|---|---|
-| Lambda | $0 | Free tier is 1M requests and 400,000 GB-sec; this uses well under 1% of both. |
+| Lambda | $0 | Always Free request and compute allowances; this uses a fraction of a percent of each. |
 | EventBridge | $0 | Scheduled rules are not billed. |
-| DynamoDB | ~$0 | On-demand billing, so idle tables cost nothing; ~6,000 requests/month and far under the 25 GB free storage. |
-| CloudWatch Logs | $0 | Under the 5 GB free ingestion, and retention is capped at 14 days. |
-| API Gateway | ~$0 | Billed per request at $3.50/million. |
+| DynamoDB | $0 | On-demand billing, so idle tables cost nothing. Log rows expire after 120 days, so storage stays bounded rather than growing forever. |
+| CloudWatch Logs | $0 | Retention capped at 14 days, well under the free ingestion allowance. |
+| API Gateway | $0 | A usage plan caps the API at 500 requests/day. |
 | SNS | $0 | Email notifications are free. SMS is the one thing here that bills per message. |
-| Parameter Store | $0 | Standard parameters are free; Secrets Manager would be $0.40/month. |
+| Parameter Store | $0 | Standard-tier parameters, including SecureStrings, are free. Secrets Manager would be $0.40/month for the same job. |
 
-Two things worth doing before you deploy: set an **AWS Budgets** zero-spend
-alert (free, and it emails you the moment anything bills), and remember that
-API Gateway's free tier is 12 months rather than perpetual — past that it's
-still only per-request.
+Worth doing before you deploy: set an **AWS Budgets** zero-spend alert. It is
+free, and it emails you the moment anything bills — which beats trusting a
+table like this one.
+
+AWS changed its free tier terms on 2025-07-15 and they vary by account age,
+so check [the current free tier page](https://aws.amazon.com/free/) rather
+than relying on specific limits quoted anywhere, this README included.
 
 ## Possible extensions
 
